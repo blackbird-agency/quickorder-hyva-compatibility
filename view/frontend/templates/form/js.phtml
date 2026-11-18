@@ -1,0 +1,313 @@
+<?php
+/**
+ * Blackbird QuickOrder Hyvä Compatibility
+ *
+ * @copyright Copyright (c) 2026 Blackbird Agency (https://black.bird.eu)
+ * @license   MIT, see LICENSE.txt
+ */
+
+declare(strict_types=1);
+
+/**
+ * Alpine.js component of the Quick Order page, port of Blackbird_QuickOrder/js/blackbird_quickorder.js.
+ * Written CSP-compatible: no expression with arguments in the markup, loop values read through `this.row`.
+ *
+ * @var \Magento\Framework\View\Element\Template $block
+ * @var \Hyva\Theme\ViewModel\HyvaCsp|null $hyvaCsp
+ */
+?>
+<script>
+    function initQuickOrder() {
+        const VALIDATION_DELAY = 800;
+        const NEW_ROW_DELAY = 600;
+        // hard-coded in the Luma widget: references longer than this trigger a validation on load / after removal
+        const AUTO_VALIDATION_LENGTH = 5;
+
+        let rowKey = 0;
+        // a number input shows (and Luma sends) an empty value for a non-numeric quantity read from a file
+        const cleanQuantity = (quantity) => {
+            const value = String(quantity).trim();
+            return value !== '' && Number.isFinite(Number(value)) ? value : '';
+        };
+        const newRow = (reference = '', quantity = '') => ({
+            key: ++rowKey,
+            reference: String(reference),
+            quantity: cleanQuantity(quantity),
+            productId: '',
+            sku: '',
+            messageClass: '',
+            messageContent: '',
+            showMessage: false,
+            refError: false,
+            qtyError: false
+        });
+
+        return {
+            config: {},
+            rows: [],
+            pending: false,
+            revalidate: false,
+            validatedOk: false,
+            showErrorHelp: false,
+            showFileInfo: true,
+            useSavedMapping: false,
+            submitting: false,
+            lastSent: '',
+            okSignature: null,
+            timer: null,
+            rowTimer: null,
+
+            init() {
+                this.config = JSON.parse(this.$el.dataset.quickorderConfig || '{}');
+                this.useSavedMapping = !!this.config.useSavedMapping;
+                this.rows = (this.config.rows || []).map((row) => newRow(row.reference, row.quantity));
+
+                if (this.hasDataToValidate()) {
+                    this.validate();
+                }
+                window.dispatchEvent(new CustomEvent('reload-customer-section-data'));
+                window.addEventListener('pageshow', (event) => {
+                    if (event.persisted) {
+                        this.submitting = false;
+                    }
+                });
+            },
+
+            // ----- row markup helpers (called inside x-for, `this.row` is the current row)
+            refInputId() {
+                return 'quickorder-ref-' + this.row.key;
+            },
+            qtyInputId() {
+                return 'quickorder-qty-' + this.row.key;
+            },
+            refInputClass() {
+                return this.row.refError ? 'quickorder-error border-red-600' : '';
+            },
+            qtyInputClass() {
+                return this.row.qtyError ? 'quickorder-error border-red-600' : '';
+            },
+            messageClass() {
+                const serverClass = this.row.messageClass || '';
+                const color = serverClass.split(' ').includes('success') ? 'text-green-700' : 'text-red-600';
+
+                return serverClass + ' ' + color;
+            },
+
+            // ----- events
+            onRefInput(event) {
+                this.row.reference = event.target.value;
+                // the hidden product id/sku belong to the previous reference until a new answer comes
+                this.row.productId = '';
+                this.row.sku = '';
+                this.scheduleTypingValidation(event.target, this.row.reference.length >= this.minRefLength());
+                this.checkAutoNewRow(this.row);
+            },
+            onQtyInput(event) {
+                this.row.quantity = event.target.value;
+                this.scheduleTypingValidation(event.target, true);
+                this.checkAutoNewRow(this.row);
+            },
+            onFieldBlur(event) {
+                // an emptied field still needs a validation when the rows changed since the last call
+                if (event.target.value.length < 1 && this.signature() === this.lastSent) {
+                    return;
+                }
+                this.scheduleValidation();
+            },
+            addRow() {
+                this.rows.push(newRow());
+            },
+            resetRows() {
+                clearTimeout(this.timer);
+                clearTimeout(this.rowTimer);
+                this.rows = Array.from({length: this.defaultRows()}, () => newRow());
+                this.lastSent = '';
+                this.validatedOk = false;
+                this.showErrorHelp = false;
+                this.showFileInfo = false;
+            },
+            removeRow() {
+                const index = this.rows.indexOf(this.row);
+                if (index === -1) {
+                    return;
+                }
+                this.rows.splice(index, 1);
+                if (this.rows.length === 0) {
+                    this.validatedOk = false;
+                    this.showErrorHelp = false;
+                }
+                clearTimeout(this.timer);
+                this.timer = setTimeout(() => {
+                    if (this.hasDataToValidate()) {
+                        this.validate();
+                    }
+                }, VALIDATION_DELAY);
+            },
+            onSavedMappingChange(event) {
+                this.useSavedMapping = event.target.checked;
+            },
+            onSubmit(event) {
+                if (this.isSubmitDisabled()) {
+                    event.preventDefault();
+                    return;
+                }
+                this.submitting = true;
+            },
+
+            // ----- state read by the markup
+            isSubmitDisabled() {
+                // the rows must be exactly the ones the last successful answer was about
+                return this.pending || !this.validatedOk || this.rows.length === 0 || this.submitting
+                    || this.signature() !== this.okSignature;
+            },
+            showMappingFields() {
+                return !this.useSavedMapping;
+            },
+
+            // ----- validation
+            minRefLength() {
+                return parseInt(this.config.refMin, 10) || 0;
+            },
+            defaultRows() {
+                return parseInt(this.config.defaultRows, 10) || 0;
+            },
+            hasDataToValidate() {
+                return this.rows.some((row) => row.reference.length > AUTO_VALIDATION_LENGTH);
+            },
+            scheduleTypingValidation(input, allowed) {
+                if (!allowed) {
+                    return;
+                }
+                clearTimeout(this.timer);
+                this.timer = setTimeout(() => {
+                    if (document.activeElement === input) {
+                        this.validate();
+                    }
+                }, VALIDATION_DELAY);
+            },
+            scheduleValidation() {
+                clearTimeout(this.timer);
+                this.timer = setTimeout(() => this.validate(), VALIDATION_DELAY);
+            },
+            checkAutoNewRow(row) {
+                if (!this.config.autoRows || this.rows[this.rows.length - 1] !== row) {
+                    return;
+                }
+                if (row.reference.length > 0 && row.quantity.length > 0) {
+                    clearTimeout(this.rowTimer);
+                    this.rowTimer = setTimeout(() => {
+                        if (this.rows[this.rows.length - 1] === row) {
+                            this.addRow();
+                        }
+                    }, NEW_ROW_DELAY);
+                }
+            },
+            signature() {
+                return JSON.stringify(this.currentData());
+            },
+            currentData() {
+                return this.rows.map((row) => ({reference: row.reference, quantity: row.quantity}));
+            },
+            validate() {
+                if (this.pending) {
+                    // a call is running: validate again once it is done
+                    this.revalidate = true;
+                    return;
+                }
+                const data = this.currentData();
+                const signature = JSON.stringify(data);
+                this.okSignature = null;
+                if (signature === this.lastSent) {
+                    return;
+                }
+                this.lastSent = signature;
+                this.pending = true;
+                this.validatedOk = false;
+
+                const body = new URLSearchParams();
+                body.append('form_key', hyva.getFormKey());
+                data.forEach((row, i) => {
+                    body.append(`formData[rows][${i}][reference]`, row.reference);
+                    body.append(`formData[rows][${i}][quantity]`, row.quantity);
+                });
+
+                fetch(this.config.validationUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    },
+                    body: body
+                })
+                    .then((response) => {
+                        if (!response.ok) {
+                            throw new Error('Quick order validation failed: HTTP ' + response.status);
+                        }
+                        return response.json();
+                    })
+                    .then((answer) => {
+                        // rows changed during the call: positions no longer match, the next call will answer
+                        if (this.signature() === signature) {
+                            this.processAnswer(answer);
+                            this.okSignature = this.validatedOk ? signature : null;
+                        } else {
+                            this.revalidate = true;
+                        }
+                    })
+                    .catch((error) => {
+                        console.warn(error);
+                        this.lastSent = '';
+                        this.validatedOk = false;
+                    })
+                    .finally(() => {
+                        this.pending = false;
+                        if (this.revalidate) {
+                            this.revalidate = false;
+                            this.validate();
+                        }
+                    });
+            },
+            processAnswer(answer) {
+                const answerRows = (answer && answer.rows) || {};
+                let errorCount = 0;
+
+                this.rows.forEach((row, i) => {
+                    const data = answerRows[i];
+                    if (typeof data === 'undefined') {
+                        // empty reference: forget what an earlier answer said about this row
+                        Object.assign(row, {productId: '', sku: '', showMessage: false, refError: false, qtyError: false});
+                        return;
+                    }
+                    row.productId = data.productId || '';
+                    row.sku = data.sku || '';
+                    row.messageClass = (data.message && data.message.class) || '';
+                    row.messageContent = (data.message && data.message.content) || '';
+                    row.showMessage = true;
+                    row.refError = false;
+                    row.qtyError = false;
+
+                    if (data.referenceError) {
+                        row.refError = true;
+                        errorCount++;
+                        return;
+                    }
+                    if ((row.quantity.length > 0 && (data.qtyError || data.stockError)) || data.isSalable === false) {
+                        row.qtyError = true;
+                        errorCount++;
+                        return;
+                    }
+                    // validation messages only appear once a quantity is typed
+                    if (row.quantity.length < 1) {
+                        row.showMessage = false;
+                    }
+                });
+
+                this.validatedOk = answer.hasErrors !== true && Object.keys(answerRows).length > 0;
+                this.showErrorHelp = errorCount > 0;
+            }
+        };
+    }
+
+    window.addEventListener('alpine:init', () => Alpine.data('initQuickOrder', initQuickOrder), {once: true});
+</script>
+<?php isset($hyvaCsp) && $hyvaCsp->registerInlineScript() ?>

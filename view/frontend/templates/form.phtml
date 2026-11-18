@@ -1,0 +1,291 @@
+<?php
+/**
+ * Blackbird QuickOrder Hyvä Compatibility
+ *
+ * @copyright Copyright (c) 2026 Blackbird Agency (https://black.bird.eu)
+ * @license   MIT, see LICENSE.txt
+ */
+
+declare(strict_types=1);
+
+use Blackbird\QuickOrder\Block\Index;
+use Magento\Framework\Escaper;
+
+/**
+ * Hyvä replacement of Blackbird_QuickOrder::form.phtml (served on Hyvä themes only, by the compat module fallback).
+ *
+ * @var Index $block
+ * @var Escaper $escaper
+ */
+
+$savedMapping = $block->getMappingParams();
+$hasMapping = $block->hasMapping();
+$isGuestMode = !$block->isCustomerLoggedIn();
+$fileData = $block->getFileData();
+$fileName = $block->getFileName();
+$defaultRowsNumber = $block->getDefaultRowsNumber();
+
+$initialRows = [];
+if ($fileData !== null) {
+    foreach ($fileData as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $initialRows[] = [
+            'reference' => is_scalar($row['reference'] ?? null) ? (string)$row['reference'] : '',
+            'quantity' => is_scalar($row['quantity'] ?? null) ? (string)$row['quantity'] : '',
+        ];
+    }
+} else {
+    $initialRows = array_fill(0, $defaultRowsNumber, ['reference' => '', 'quantity' => '']);
+}
+
+$config = [
+    'validationUrl' => $block->getAjaxValidationUrl(),
+    'defaultRows' => $defaultRowsNumber,
+    'refMin' => $block->getRefValidationLength(),
+    'autoRows' => $block->getShouldGenerateNewRows(),
+    'useSavedMapping' => $hasMapping && !$isGuestMode,
+    'rows' => $initialRows,
+];
+$formKey = '<input name="form_key" type="hidden" value="'
+    . $escaper->escapeHtmlAttr($block->getFormKey()) . '" />';
+$buttonTitle = __('Add to Cart');
+?>
+<div class="quickorder-container my-6"
+     x-data="initQuickOrder"
+     data-quickorder-config="<?= $escaper->escapeHtmlAttr(json_encode($config, JSON_INVALID_UTF8_SUBSTITUTE)) ?>"
+>
+    <div class="grid gap-8 lg:grid-cols-3">
+        <div class="lg:col-span-2">
+            <form id="quickorder_add_items"
+                  action="<?= $escaper->escapeUrl($block->getAddUrl()) ?>"
+                  method="post"
+                  @submit="onSubmit"
+            >
+                <?= /* @noEscape */ $formKey ?>
+                <h2 class="text-xl font-medium mb-4"><?= $escaper->escapeHtml(__('By SKU or name')) ?></h2>
+                <?php if ($fileName): ?>
+                    <p class="quickorder-file-info mb-4 text-sm text-gray-600" x-show="showFileInfo">
+                        <?= $escaper->escapeHtml(__('Currently reading data from : %1', $fileName)) ?>
+                    </p>
+                <?php endif; ?>
+
+                <table class="w-full text-left" id="super-product-table">
+                    <thead class="hidden md:table-header-group border-b border-container">
+                    <tr>
+                        <th class="py-2 pr-2 font-medium" scope="col"><?= $escaper->escapeHtml(__('Ref')) ?></th>
+                        <th class="py-2 pr-2 font-medium w-32" scope="col">
+                            <?= $escaper->escapeHtml(__('Quantity')) ?>
+                        </th>
+                        <th class="py-2 pr-2 font-medium" scope="col"><?= $escaper->escapeHtml(__('Status')) ?></th>
+                        <th class="py-2 font-medium w-12" scope="col">
+                            <span class="sr-only"><?= $escaper->escapeHtml(__('Action')) ?></span>
+                        </th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <template x-for="row in rows" :key="row.key">
+                        <tr class="flex flex-wrap items-start gap-2 py-3 border-b border-container
+                                   md:table-row md:py-0">
+                            <td class="basis-full md:py-2 md:pr-2">
+                                <label class="block mb-1 text-sm md:sr-only" :for="refInputId">
+                                    <?= $escaper->escapeHtml(__('Ref')) ?>
+                                </label>
+                                <input type="text"
+                                       name="product_ref[]"
+                                       class="form-input w-full product-ref"
+                                       :id="refInputId"
+                                       :class="refInputClass"
+                                       :value="row.reference"
+                                       @input="onRefInput"
+                                       @blur="onFieldBlur"
+                                       autocomplete="off"
+                                />
+                                <input type="hidden" name="product_id[]" :value="row.productId"/>
+                                <input type="hidden" name="product_sku[]" :value="row.sku"/>
+                            </td>
+                            <td class="w-28 md:w-32 md:py-2 md:pr-2">
+                                <label class="block mb-1 text-sm md:sr-only" :for="qtyInputId">
+                                    <?= $escaper->escapeHtml(__('Quantity')) ?>
+                                </label>
+                                <input type="number"
+                                       name="product_qty[]"
+                                       min="0"
+                                       class="form-input w-full product-qty"
+                                       :id="qtyInputId"
+                                       :class="qtyInputClass"
+                                       :value="row.quantity"
+                                       @input="onQtyInput"
+                                       @blur="onFieldBlur"
+                                />
+                            </td>
+                            <td class="flex-1 self-end pb-2 text-sm md:self-center md:py-2 md:pr-2" aria-live="polite">
+                                <span x-show="row.showMessage"
+                                      x-text="row.messageContent"
+                                      :class="messageClass"
+                                ></span>
+                            </td>
+                            <td class="self-end md:self-center md:py-2 text-right">
+                                <button type="button"
+                                        class="p-2 text-gray-500 hover:text-red-600"
+                                        title="<?= $escaper->escapeHtmlAttr(__('Remove row')) ?>"
+                                        aria-label="<?= $escaper->escapeHtmlAttr(__('Remove row')) ?>"
+                                        @click="removeRow"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none"
+                                         viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"
+                                         aria-hidden="true">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                                    </svg>
+                                </button>
+                            </td>
+                        </tr>
+                    </template>
+                    </tbody>
+                </table>
+
+                <div class="flex flex-wrap gap-4 mt-4">
+                    <button type="button" class="btn btn-secondary" @click="addRow">
+                        <?= $escaper->escapeHtml(__('Add a row')) ?>
+                    </button>
+                    <button type="button" class="btn btn-secondary" @click="resetRows">
+                        <?= $escaper->escapeHtml(__('Reset rows')) ?>
+                    </button>
+                </div>
+
+                <div class="mt-6">
+                    <p class="quickorder-error-help mb-4 text-red-600" x-show="showErrorHelp" x-cloak aria-live="polite">
+                        <?= $escaper->escapeHtml(
+                            __('Please correct any errors highlighted in red before submitting your order')
+                        ) ?>
+                    </p>
+                    <div class="flex flex-wrap items-center gap-4">
+                        <button type="submit"
+                                id="product-addtocart-button"
+                                class="btn btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
+                                title="<?= $escaper->escapeHtmlAttr($buttonTitle) ?>"
+                                :disabled="isSubmitDisabled"
+                                disabled
+                        >
+                            <?= $escaper->escapeHtml($buttonTitle) ?>
+                        </button>
+                        <span class="flex items-center gap-2 text-sm text-gray-600" x-show="pending" x-cloak>
+                            <svg class="w-5 h-5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none"
+                                 viewBox="0 0 24 24" aria-hidden="true">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor"
+                                        stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor"
+                                      d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+                            </svg>
+                            <?= $escaper->escapeHtml(__('Validation in progress')) ?>
+                        </span>
+                        <?= $block->getChildHtml('', true) ?>
+                    </div>
+                </div>
+            </form>
+        </div>
+
+        <div class="quickorder-file-form-wrapper">
+            <h2 class="text-xl font-medium mb-4"><?= $escaper->escapeHtml(__('By excel or csv file')) ?></h2>
+            <form id="quickorder_file_form"
+                  action="<?= $escaper->escapeUrl($block->getFileHandlingUrl()) ?>"
+                  method="post"
+                  enctype="multipart/form-data"
+                  class="card"
+            >
+                <?= /* @noEscape */ $formKey ?>
+                <div class="field mb-4">
+                    <label class="sr-only" for="quickorder_file_input">
+                        <?= $escaper->escapeHtml(__('By excel or csv file')) ?>
+                    </label>
+                    <input type="file"
+                           id="quickorder_file_input"
+                           name="quickorder_file_input"
+                           accept=".csv,.xlsx"
+                           class="block w-full text-sm"
+                    />
+                    <p class="mt-1 text-sm text-gray-600">
+                        <?= $escaper->escapeHtml(__('Accepted file type : %1', 'csv, xlsx')) ?>
+                    </p>
+                </div>
+
+                <?php if (!$isGuestMode): ?>
+                    <div class="field mb-4 flex items-center gap-2">
+                        <input type="checkbox"
+                               class="form-checkbox"
+                               name="quickorder_use_saved_mapping"
+                               id="quickorder_use_saved_mapping"
+                               @change="onSavedMappingChange"
+                               <?= $hasMapping ? 'checked' : 'disabled' ?>
+                        >
+                        <label for="quickorder_use_saved_mapping">
+                            <?= $escaper->escapeHtml(__('Use saved mapping')) ?>
+                        </label>
+                    </div>
+                <?php endif; ?>
+
+                <div class="quickorder-mapping-action" x-show="showMappingFields">
+                    <h3 class="font-medium mb-2"><?= $escaper->escapeHtml(__('Mapping')) ?></h3>
+                    <div class="field mb-3">
+                        <label class="label" for="quickorder_mapping_reference">
+                            <?= $escaper->escapeHtml(__('Reference column')) ?>
+                        </label>
+                        <input type="text"
+                               id="quickorder_mapping_reference"
+                               name="quickorder_mapping_reference"
+                               value="<?= $escaper->escapeHtmlAttr($savedMapping['reference'] ?? '') ?>"
+                               class="form-input w-full"
+                        />
+                    </div>
+                    <div class="field mb-3">
+                        <label class="label" for="quickorder_mapping_qty">
+                            <?= $escaper->escapeHtml(__('Quantity column')) ?>
+                        </label>
+                        <input type="text"
+                               id="quickorder_mapping_qty"
+                               name="quickorder_mapping_qty"
+                               value="<?= $escaper->escapeHtmlAttr($savedMapping['qty'] ?? '') ?>"
+                               class="form-input w-full"
+                        />
+                    </div>
+                    <?php if (!$isGuestMode): ?>
+                        <div class="field mb-3 flex items-center gap-2">
+                            <input type="checkbox"
+                                   class="form-checkbox"
+                                   name="quickorder_save_new_mapping"
+                                   id="quickorder_save_new_mapping"
+                            >
+                            <label for="quickorder_save_new_mapping">
+                                <?= $escaper->escapeHtml(__('Save this mapping for future orders')) ?>
+                            </label>
+                        </div>
+                    <?php endif; ?>
+                </div>
+
+                <div class="mt-4">
+                    <button type="submit" class="btn btn-primary">
+                        <?= $escaper->escapeHtml(__('Download')) ?>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+         x-show="submitting"
+         x-cloak
+         role="alert"
+         aria-live="assertive"
+    >
+        <div class="flex items-center gap-3 max-w-md p-6 rounded-md bg-white shadow-lg">
+            <svg class="w-6 h-6 shrink-0 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none"
+                 viewBox="0 0 24 24" aria-hidden="true">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+            </svg>
+            <span><?= $escaper->escapeHtml($block->getLoaderText()) ?></span>
+        </div>
+    </div>
+</div>
+<?= /* @noEscape */ $block->fetchView($block->getTemplateFile('Blackbird_QuickOrderHyvaCompatibility::form/js.phtml')) ?>

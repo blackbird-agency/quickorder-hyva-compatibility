@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<page xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:noNamespaceSchemaLocation="urn:magento:framework:View/Layout/etc/page_configuration.xsd">
+    <body>
+        <!-- Hyvä header has no "header.links": the link goes to the customer menu instead -->
+        <referenceBlock name="header.customer.logged.in.links">
+            <block name="customer.header.quickorder.link"
+                   class="Hyva\Theme\Block\SortableItemInterface"
+                   ifconfig="blackbird_quickorder/links/header">
+                <arguments>
+                    <argument name="label" xsi:type="string" translate="true">Quickorder</argument>
+                    <argument name="path" xsi:type="string">quickorder</argument>
+                    <argument name="sort_order" xsi:type="number">30</argument>
+                </arguments>
+            </block>
+        </referenceBlock>
+        <referenceBlock name="header.customer.logged.out.links">
+            <block name="customer.header.quickorder.guest.link"
+                   class="Hyva\Theme\Block\SortableItemInterface"
+                   template="Blackbird_QuickOrderHyvaCompatibility::header/link/quickorder-guest.phtml"
+                   ifconfig="blackbird_quickorder/links/header">
+                <arguments>
+                    <argument name="label" xsi:type="string" translate="true">Quickorder</argument>
+                    <argument name="path" xsi:type="string">quickorder</argument>
+                    <argument name="sort_order" xsi:type="number">30</argument>
+                    <argument name="quickorder_config" xsi:type="object">Blackbird\QuickOrderHyvaCompatibility\ViewModel\QuickOrderConfig</argument>
+                </arguments>
+            </block>
+        </referenceBlock>
+    </body>
+</page>
